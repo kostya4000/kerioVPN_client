@@ -89,6 +89,24 @@ kerio-vpn-gui
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+## Установка из .deb
+
+Готовые пакеты публикуются в разделе **Releases**:
+
+https://github.com/kostya4000/kerioVPN_client/releases
+
+Скачайте `kerio-vpn-gui_<версия>-1_all.deb` и установите:
+
+```bash
+sudo apt install ./kerio-vpn-gui_<версия>-1_all.deb
+```
+
+Пакет устанавливает приложение в `/usr/share/kerio-vpn-gui`, ярлык в `/usr/bin/kerio-vpn-gui`, иконку, desktop-файл и помощник `/usr/lib/kerio-vpn-gui/kvc-helper`. Профили и настройки по-прежнему хранятся в `~/.config/kerio-vpn-gui` и сохраняются при обновлении пакета.
+
+Используйте **один** способ установки: `.deb` **или** `install.sh`. Если ранее уже устанавливали версию через скрипт, перед установкой `.deb` удалите её командой `./uninstall.sh` (профили и настройки сохранятся) — иначе в меню может остаться две записи «Kerio VPN», и пользовательский ярлык будет перекрывать системный.
+
+Вместо `apt` можно использовать `sudo dpkg -i <файл>.deb`, но тогда зависимости придётся доставить через `sudo apt -f install`.
+
 Запуск без установки (для разработки):
 
 ```bash
@@ -102,12 +120,18 @@ export PATH="$HOME/.local/bin:$PATH"
 Версия приложения хранится в `kerio_vpn_gui/core.py` (`APP_VERSION`) и показывается в `--version` и в окне «О программе». При каждой сборке она повышается автоматически:
 
 ```bash
-./build.sh          # patch: 1.2.0 → 1.2.1, тесты, dist/kerio-vpn-gui-<версия>.tar.gz
+./build.sh          # patch: 1.2.0 → 1.2.1, тесты, .tar.gz + .deb + SHA256SUMS
 ./build.sh minor    # minor: 1.2.0 → 1.3.0
 ./build.sh major    # major: 1.2.0 → 2.0.0
 ```
 
-Скрипт сначала запускает тесты, затем повышает версию и собирает архив в `dist/` (каталог исключён из git).
+Скрипт сначала запускает тесты, затем повышает версию и собирает в `dist/`:
+
+- `kerio-vpn-gui-<версия>.tar.gz` — исходники;
+- `kerio-vpn-gui_<версия>-1_all.deb` — установочный пакет;
+- `SHA256SUMS` — контрольные суммы.
+
+Каталог `dist/` исключён из git, готовые файлы прикладываются к GitHub Releases.
 
 ## Быстрый старт
 
@@ -204,6 +228,13 @@ Cinnamon поддерживает трей; проверьте, что паке�
 
 Помощник удаляется через `sudo`.
 
+Если приложение установлено из `.deb`, удаляйте его через apt:
+
+```bash
+sudo apt remove kerio-vpn-gui
+sudo apt purge kerio-vpn-gui   # также удалит правило polkit
+```
+
 ## Структура проекта
 
 ```
@@ -220,7 +251,8 @@ kerio_client/
 ├── assets/                    # иконка и скриншоты
 ├── tests/test_core.py         # тесты модели и импорта
 ├── scripts/bump_version.py    # повышение APP_VERSION
-├── build.sh                   # тесты + bump версии + архив в dist/
+├── packaging/build_deb.sh     # сборка .deb
+├── build.sh                   # тесты + bump версии + .tar.gz и .deb
 ├── install.sh
 └── uninstall.sh
 ```

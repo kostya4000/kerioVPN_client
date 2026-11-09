@@ -20,8 +20,10 @@ echo "==> Повышение версии ($PART)"
 NEW_VERSION="$(python3 "$ROOT/scripts/bump_version.py" "$PART")"
 echo "Версия: $NEW_VERSION"
 
-echo "==> Сборка архива"
 mkdir -p "$ROOT/dist"
+rm -f "$ROOT"/dist/kerio-vpn-gui-*.tar.gz "$ROOT"/dist/kerio-vpn-gui_*.deb "$ROOT"/dist/SHA256SUMS
+
+echo "==> Сборка архива"
 ARCHIVE="$ROOT/dist/kerio-vpn-gui-$NEW_VERSION.tar.gz"
 tar \
     --exclude='.git' \
@@ -31,9 +33,22 @@ tar \
     --exclude='profiles.json' \
     -czf "$ARCHIVE" \
     -C "$ROOT" \
-    kerio_vpn_gui bin helper assets tests scripts \
+    kerio_vpn_gui bin helper assets tests scripts packaging \
     build.sh install.sh uninstall.sh README.md .gitignore
 
+echo "==> Сборка .deb"
+DEB="$(bash "$ROOT/packaging/build_deb.sh" "$NEW_VERSION")"
+echo "Пакет: $DEB"
+
+echo "==> Контрольные суммы"
+(
+    cd "$ROOT/dist"
+    sha256sum "$(basename "$ARCHIVE")" "$(basename "$DEB")" >SHA256SUMS
+)
+
 echo
-echo "Готово: $ARCHIVE"
+echo "Готово:"
+echo "  $ARCHIVE"
+echo "  $DEB"
+echo "  $ROOT/dist/SHA256SUMS"
 echo "Установка из исходников: ./install.sh"
