@@ -1,0 +1,159 @@
+#!/bin/sh
+# kvc-helper — привилегированные операции для Kerio VPN GUI.
+# Устанавливается в /usr/local/lib/kerio-vpn-gui/kvc-helper и вызывается через pkexec.
+#
+# Использование:
+#   kvc-helper connect <файл-конфигурации> <0|1 — исправлять MAC>
+#   kvc-helper disconnect
+#   kvc-helper restart
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONF=/etc/kerio-kvc.conf
+INIT=/etc/init.d/kerio-kvc
+LOG=/var/log/kerio-kvc/debug.log
+IFACE=kvnet
+
+log() {
+    logger -t kerio-vpn-gui -- "$*" 2>/dev/null || true
+}
+
+die() {
+    echo "ОШИБКА: $*" >&2
+    log "ERROR: $*"
+    exit 1
+}
+
+[ "$(id -u)" -eq 0 ] || die "помощник должен запускаться от root (через pkexec)"
+
+stop_kvc() {
+    # Сначала останавливаем unit, если службой управляет systemd,
+    # чтобы Restart=always не поднял процесс со старой конфигурацией.
+    systemctl stop kerio-kvc.service >/dev/null 2>&1 || true
+    if [ -x "$INIT" ]; then
+        timeout 20 "$INIT" stop >/dev/null 2>&1 || true
+    fi
+
+    i=0
+    while pgrep -x kvpncsvc >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -gt 20 ]; then
+            pkill -x kvpncsvc >/dev/null 2>&1 || true
+            sleep 1
+            break
+        fi
+        sleep 0.5
+    done
+}
+
+start_kvc() {
+    if [ -x "$INIT" ]; then
+        "$INIT" start >/dev/null 2>&1 || true
+    else
+        systemctl start kerio-kvc.service >/dev/null 2>&1 || true
+    fi
+
+    i=0
+    while ! pgrep -x kvpncsvc >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -gt 30 ]; then
+            return 1
+        fi
+        sleep 0.5
+    done
+    return 0
+}
+
+apply_config() {
+    src=$1
+    [ -f "$src" ] || die "файл конфигурации не найден: $src"
+    # Файл должен принадлежать пользователю, который запросил повышение прав.
+    if [ -n "${PKEXEC_UID:-}" ]; then
+        owner=$(stat -c %u "$src" 2>/dev/null || echo -1)
+        [ "$owner" = "$PKEXEC_UID" ] || die "файл конфигурации должен принадлежать вызывающему пользователю"
+    fi
+    grep -q "<config>" "$src" 2>/dev/null || die "некорректный конфиг: нет <config>"
+    grep -q "<connection" "$src" 2>/dev/null || die "некорректный конфиг: нет <connection>"
+
+    stop_kvc
+    tmp="${CONF}.kerio-vpn-gui.$$"
+    cp -f "$src" "$tmp" || { rm -f "$tmp"; die "не удалось записать $CONF"; }
+    chown root:root "$tmp" 2>/dev/null || true
+    chmod 644 "$tmp" || true
+    mv -f "$tmp" "$CONF" || { rm -f "$tmp"; die "не удалось заменить $CONF"; }
+    start_kvc || die "служба Kerio VPN не запустилась"
+}
+
+fix_mac() {
+    start_size=$1
+
+    # Если журнал ротировался/обрезался — читаем его с начала.
+    if [ -f "$LOG" ]; then
+        now_size=$(wc -c <"$LOG" 2>/dev/null || echo 0)
+        [ "$now_size" -lt "$start_size" ] && start_size=0
+    else
+        start_size=0
+    fi
+
+    i=0
+    mac=""
+    while [ "$i" -lt 40 ]; do
+        mac=$(tail -c +$((start_size + 1)) "$LOG" 2>/dev/null \
+            | grep -a "MAC" \
+            | tail -n 1 \
+            | sed -n 's/.*MAC \([0-9a-fA-F:-]\{11,17\}\).*/\1/p')
+        [ -n "$mac" ] && break
+        i=$((i + 1))
+        sleep 0.5
+    done
+
+    if [ -z "$mac" ]; then
+        echo "MAC: не найден в журнале"
+        return 0
+    fi
+
+    # Даём клиенту время поднять интерфейс (как в старых .sh-скриптах).
+    sleep 3
+    mac=$(printf '%s' "$mac" | tr '-' ':')
+
+    if ip link show "$IFACE" >/dev/null 2>&1; then
+        if ip link set dev "$IFACE" address "$mac" >/dev/null 2>&1; then
+            echo "MAC: $mac"
+        else
+            echo "MAC: не удалось назначить $mac"
+        fi
+    else
+        echo "MAC: интерфейс $IFACE не найден"
+    fi
+}
+
+case "$1" in
+    connect)
+        [ -n "${2:-}" ] || die "connect: требуется путь к конфигурации"
+        macfix=${3:-0}
+        start_size=0
+        if [ -f "$LOG" ]; then
+            start_size=$(wc -c <"$LOG" 2>/dev/null || echo 0)
+        fi
+        apply_config "$2"
+        if [ "$macfix" = "1" ]; then
+            fix_mac "$start_size"
+        fi
+        log "connected using $2 (mac_fix=$macfix)"
+        echo "OK"
+        ;;
+    disconnect)
+        stop_kvc
+        log "disconnected"
+        echo "OK"
+        ;;
+    restart)
+        stop_kvc
+        start_kvc || die "служба Kerio VPN не запустилась"
+        log "service restarted"
+        echo "OK"
+        ;;
+    *)
+        echo "Использование: $0 {connect <config> <0|1>|disconnect|restart}" >&2
+        exit 2
+        ;;
+esac

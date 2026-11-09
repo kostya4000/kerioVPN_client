@@ -1,0 +1,6 @@
+#!/bin/bash
+# Запуск Kerio VPN GUI из каталога с исходниками.
+set -e
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
+exec -a kerio-vpn-gui python3 -m kerio_vpn_gui "$@"
