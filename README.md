@@ -266,3 +266,5 @@ PYTHONPATH=. python3 -m unittest discover -s tests -v
 ## Примечание
 
 Приложение не является официальным продуктом Kerio Technologies. Оно лишь управляет штатным клиентом `kerio-control-vpnclient` и файлом `/etc/kerio-kvc.conf`.
+
+Ссылка на репозиторий также доступна в приложении: **Справка → О программе**.

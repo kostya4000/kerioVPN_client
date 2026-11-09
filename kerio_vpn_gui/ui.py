@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -83,6 +84,7 @@ from .theme import THEME_LABELS, THEME_MODES, ThemeManager, normalize_mode
 from .toast import ToastManager
 
 LOGS_DIR = backend.LOG_DIR
+REPO_URL = "https://github.com/kostya4000/kerioVPN_client"
 ICON_COLORS = {
     "connected": "#2ecc71",
     "connecting": "#f1c40f",
@@ -1022,7 +1024,7 @@ class MainWindow(QMainWindow):
             self._theme_icon(
                 ("document-open", "folder-open"), QStyle.SP_DirOpenIcon
             ),
-            "Импорт из папки…",
+            "Импорт из папки",
             self,
         )
         self.act_import.setShortcut(QKeySequence("Ctrl+I"))
@@ -1046,7 +1048,7 @@ class MainWindow(QMainWindow):
             self._theme_icon(
                 ("preferences-system", "settings"), QStyle.SP_FileDialogInfoView
             ),
-            "Настройки…",
+            "Настройки",
             self,
         )
         self.act_settings.setShortcut(QKeySequence("Ctrl+,"))
@@ -2284,17 +2286,25 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         helper = backend.helper_path()
-        helper_text = str(helper) if helper else "не установлен"
-        QMessageBox.about(
-            self,
-            f"О {APP_NAME}",
+        helper_text = html.escape(str(helper) if helper else "не установлен")
+        profiles_path = html.escape(str(self.store.path))
+        box = QMessageBox(self)
+        box.setWindowTitle(f"О {APP_NAME}")
+        box.setIcon(QMessageBox.Information)
+        box.setTextFormat(Qt.RichText)
+        box.setText(
             f"<h3>{APP_NAME} {APP_VERSION}</h3>"
             "<p>Графическое управление подключениями Kerio Control VPN.</p>"
-            f"<p><b>Профили:</b> {self.store.path}<br>"
+            f"<p><b>Репозиторий:</b> <a href=\"{REPO_URL}\">{REPO_URL}</a></p>"
+            f"<p><b>Профили:</b> {profiles_path}<br>"
             f"<b>Помощник:</b> {helper_text}</p>"
             "<p>Приложение не является официальным продуктом Kerio Technologies. "
-            "Конфигурация записывается в /etc/kerio-kvc.conf через pkexec.</p>",
+            "Конфигурация записывается в /etc/kerio-kvc.conf через pkexec.</p>"
         )
+        box.setStandardButtons(QMessageBox.Ok)
+        for label in box.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
+        box.exec_()
 
     def _show_window(self) -> None:
         self.showNormal()
