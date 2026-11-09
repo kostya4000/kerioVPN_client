@@ -30,8 +30,10 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
+    QActionGroup,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -77,6 +79,7 @@ from .core import (
     read_current_config,
     scan_directory,
 )
+from .theme import THEME_LABELS, THEME_MODES, ThemeManager, normalize_mode
 
 LOGS_DIR = backend.LOG_DIR
 ICON_COLORS = {
@@ -147,13 +150,21 @@ class StatusBadge(QFrame):
         layout.addWidget(self.text)
         self.set_state("disconnected", "Не подключено")
 
-    def set_state(self, state: str, text: str) -> None:
-        palette = {
-            "connected": ("#e7f7ed", "#17683a", "#2ecc71"),
-            "connecting": ("#fff5df", "#8a5a00", "#f1c40f"),
-            "disconnected": ("#eef1f5", "#59636e", "#aab2bd"),
-            "error": ("#fdecea", "#9c231e", "#e74c3c"),
-        }
+    def set_state(self, state: str, text: str, dark: bool = False) -> None:
+        if dark:
+            palette = {
+                "connected": ("#153a2a", "#7ee2a8", "#2ecc71"),
+                "connecting": ("#3a2f12", "#ffd166", "#f1c40f"),
+                "disconnected": ("#282c33", "#b8c0c8", "#8b949e"),
+                "error": ("#3a1f1f", "#ff9b9b", "#ff6b6b"),
+            }
+        else:
+            palette = {
+                "connected": ("#e7f7ed", "#17683a", "#2ecc71"),
+                "connecting": ("#fff5df", "#8a5a00", "#f1c40f"),
+                "disconnected": ("#eef1f5", "#59636e", "#aab2bd"),
+                "error": ("#fdecea", "#9c231e", "#e74c3c"),
+            }
         background, foreground, dot = palette.get(state, palette["disconnected"])
         self.setStyleSheet(
             "QFrame#statusBadge {"
@@ -300,8 +311,8 @@ class ProfileDialog(QDialog):
         layout.addWidget(notes_box)
 
         self.warning_label = QLabel(self)
+        self.warning_label.setObjectName("warningLabel")
         self.warning_label.setWordWrap(True)
-        self.warning_label.setStyleSheet("color: #a86400;")
         self.warning_label.hide()
         layout.addWidget(self.warning_label)
 
@@ -481,7 +492,7 @@ class ImportDialog(QDialog):
         layout.setSpacing(10)
 
         hint = QLabel(
-            "Найдите каталог с существующими *.conf и *.sh (например, /media/1TB_nout/kerio). "
+            "Найдите каталог с существующими *.conf и *.sh (например, /path/to/kerio_config). "
             "Пароли будут прочитаны из конфигураций автоматически.",
             self,
         )
@@ -501,7 +512,7 @@ class ImportDialog(QDialog):
         layout.addLayout(path_row)
 
         self.info_label = QLabel("", self)
-        self.info_label.setStyleSheet("color: #59636e;")
+        self.info_label.setObjectName("mutedLabel")
         layout.addWidget(self.info_label)
 
         self.table = QTableWidget(0, 6, self)
@@ -697,6 +708,18 @@ class SettingsDialog(QDialog):
         behavior_layout.addWidget(self.autostart)
         layout.addWidget(behavior)
 
+        theme_box = QGroupBox("Оформление", self)
+        theme_layout = QFormLayout(theme_box)
+        self.theme_combo = QComboBox(self)
+        for mode in THEME_MODES:
+            self.theme_combo.addItem(THEME_LABELS[mode], mode)
+        current_theme = normalize_mode(str(store.settings.get("theme", "auto")))
+        self.theme_combo.setCurrentIndex(
+            max(0, self.theme_combo.findData(current_theme))
+        )
+        theme_layout.addRow("Тема:", self.theme_combo)
+        layout.addWidget(theme_box)
+
         polling = QGroupBox("Обновление и подключение", self)
         form = QFormLayout(polling)
         self.poll_spin = QSpinBox(self)
@@ -731,16 +754,18 @@ class SettingsDialog(QDialog):
         pkexec = backend.pkexec_path()
         if helper_path and pkexec:
             text = f"Готов к работе: {helper_path}"
-            color = "#17683a"
+            helper_state = "ok"
         elif helper_path:
             text = f"Помощник найден ({helper_path}), но не найден pkexec."
-            color = "#9c231e"
+            helper_state = "error"
         else:
             text = "Не установлен. Запустите ./install.sh из каталога приложения."
-            color = "#9c231e"
+            helper_state = "error"
         helper_label = QLabel(text, self)
         helper_label.setWordWrap(True)
-        helper_label.setStyleSheet(f"color: {color};")
+        helper_label.setProperty("state", helper_state)
+        helper_label.style().unpolish(helper_label)
+        helper_label.style().polish(helper_label)
         helper_layout.addWidget(helper_label)
         open_config = QPushButton("Открыть каталог настроек", self)
         open_config.clicked.connect(self._open_config_dir)
@@ -786,6 +811,7 @@ class SettingsDialog(QDialog):
         self.store.settings["connect_timeout_sec"] = self.timeout_spin.value()
         self.store.settings["import_dir"] = self.import_edit.text().strip() or DEFAULT_IMPORT_DIR
         self.store.settings["autostart"] = self.autostart.isChecked()
+        self.store.settings["theme"] = self.theme_combo.currentData() or "auto"
         self.accept()
 
 
@@ -804,6 +830,9 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.store = store
+        self.theme_manager = ThemeManager(
+            str(store.settings.get("theme", "auto")), self
+        )
         self._busy = False
         self._worker: Optional[Worker] = None
         self._fetch_worker: Optional[Worker] = None
@@ -835,6 +864,8 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_tray()
+        self.theme_manager.mode_changed.connect(self._on_theme_changed)
+        self._sync_theme_actions()
         self._restore_window_state()
 
         self._refresh_table()
@@ -986,6 +1017,20 @@ class MainWindow(QMainWindow):
         self.act_about = QAction("О программе", self)
         self.act_about.triggered.connect(self._show_about)
 
+        self.theme_group = QActionGroup(self)
+        self.theme_group.setExclusive(True)
+        self._theme_actions: dict[str, QAction] = {}
+        for mode in THEME_MODES:
+            action = QAction(THEME_LABELS[mode], self)
+            action.setCheckable(True)
+            action.setData(mode)
+            action.setChecked(mode == self.theme_manager.mode)
+            action.triggered.connect(
+                lambda checked=False, selected=mode: self._set_theme(selected)
+            )
+            self.theme_group.addAction(action)
+            self._theme_actions[mode] = action
+
         self._profile_actions = [
             self.act_edit,
             self.act_duplicate,
@@ -1026,7 +1071,7 @@ class MainWindow(QMainWindow):
         title_font.setBold(True)
         title.setFont(title_font)
         subtitle = QLabel("Профили Kerio Control VPN", self)
-        subtitle.setStyleSheet("color: #6b7580;")
+        subtitle.setObjectName("mutedLabel")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
@@ -1037,7 +1082,7 @@ class MainWindow(QMainWindow):
         right_box.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.status_badge = StatusBadge(self)
         self.uptime_label = QLabel("", self)
-        self.uptime_label.setStyleSheet("color: #6b7580;")
+        self.uptime_label.setObjectName("mutedLabel")
         self.uptime_label.setAlignment(Qt.AlignRight)
         right_box.addWidget(self.status_badge, 0, Qt.AlignRight)
         right_box.addWidget(self.uptime_label, 0, Qt.AlignRight)
@@ -1075,11 +1120,13 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setWordWrap(False)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         header_view = self.table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.Stretch)
-        header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(QHeaderView.Interactive)
+        header_view.setMinimumSectionSize(55)
+        header_view.setStretchLastSection(False)
+        for column, width in enumerate((150, 190, 95, 85)):
+            self.table.setColumnWidth(column, width)
         self.table.itemSelectionChanged.connect(self._update_details)
         self.table.itemDoubleClicked.connect(lambda *_: self._connect_selected())
         profiles_layout.addWidget(self.table, 1)
@@ -1100,7 +1147,7 @@ class MainWindow(QMainWindow):
         details_layout.addWidget(self.detail_name)
 
         self.detail_sub = QLabel("", details_box)
-        self.detail_sub.setStyleSheet("color: #6b7580;")
+        self.detail_sub.setObjectName("mutedLabel")
         self.detail_sub.setWordWrap(False)
         details_layout.addWidget(self.detail_sub)
 
@@ -1120,7 +1167,9 @@ class MainWindow(QMainWindow):
         fingerprint_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
         fingerprint_font.setPointSize(8)
         self.detail_fingerprint.setFont(fingerprint_font)
-        self.detail_fingerprint.setStyleSheet("QLineEdit { background: transparent; }")
+        self.detail_fingerprint.setStyleSheet(
+            "QLineEdit { background: transparent; padding: 0; }"
+        )
         self.detail_fingerprint.setToolTip("Отпечаток сертификата")
         self.detail_notes = self._value_label(details_box)
         self.detail_notes.setMaximumHeight(42)
@@ -1141,14 +1190,6 @@ class MainWindow(QMainWindow):
         self.connect_button = QPushButton("Подключить", details_box)
         self.connect_button.setObjectName("connectButton")
         self.connect_button.setMinimumHeight(34)
-        self.connect_button.setStyleSheet(
-            "QPushButton#connectButton {"
-            "background: #2d6cdf; color: white; border: none;"
-            "border-radius: 7px; padding: 8px 18px; font-weight: 600;"
-            "}"
-            "QPushButton#connectButton:hover { background: #2459b8; }"
-            "QPushButton#connectButton:disabled { background: #9db6e4; }"
-        )
         self.connect_button.clicked.connect(self._connect_selected)
         buttons_grid.addWidget(self.connect_button, 0, 0, 1, 2)
 
@@ -1268,6 +1309,10 @@ class MainWindow(QMainWindow):
         profile_menu.addSeparator()
         profile_menu.addAction(self.act_restart)
 
+        view_menu = self.menuBar().addMenu("&Вид")
+        for mode in THEME_MODES:
+            view_menu.addAction(self._theme_actions[mode])
+
         log_menu = self.menuBar().addMenu("&Журнал")
         log_menu.addAction(self.act_refresh)
 
@@ -1323,6 +1368,9 @@ class MainWindow(QMainWindow):
             top = self.main_splitter.widget(0)
             if isinstance(top, QSplitter):
                 top.restoreState(horizontal)
+        header_state = self._settings.value("window/table_header")
+        if header_state is not None:
+            self.table.horizontalHeader().restoreState(header_state)
 
     def _save_window_state(self) -> None:
         self._settings.setValue("window/geometry", self.saveGeometry())
@@ -1330,6 +1378,9 @@ class MainWindow(QMainWindow):
         top = self.main_splitter.widget(0)
         if isinstance(top, QSplitter):
             self._settings.setValue("window/top_splitter", top.saveState())
+        self._settings.setValue(
+            "window/table_header", self.table.horizontalHeader().saveState()
+        )
 
     # -- журналы -----------------------------------------------------------
     def _refresh_logs(self, force: bool = False) -> None:
@@ -1489,19 +1540,22 @@ class MainWindow(QMainWindow):
         self.detail_notes.setToolTip(profile.notes or "")
 
         if self._active_profile_id == profile.id and self._connected and self._tunnel:
+            colors = self.theme_manager.colors
             self.detail_state.setText(
-                "<span style='color:#17683a; font-weight:600;'>Подключено</span>"
+                f"<span style='color:{colors.success}; font-weight:600;'>Подключено</span>"
                 f" · IP {self._tunnel.address}"
             )
             self.connect_button.setText("Переподключить")
         elif self._running:
+            colors = self.theme_manager.colors
             self.detail_state.setText(
-                "<span style='color:#8a5a00;'>Активно другое подключение</span>"
+                f"<span style='color:{colors.warning};'>Активно другое подключение</span>"
             )
             self.connect_button.setText("Переключиться")
         else:
+            colors = self.theme_manager.colors
             self.detail_state.setText(
-                "<span style='color:#6b7580;'>Не подключено</span>"
+                f"<span style='color:{colors.muted};'>Не подключено</span>"
             )
             self.connect_button.setText("Подключить")
 
@@ -1539,7 +1593,11 @@ class MainWindow(QMainWindow):
 
         if connected and tunnel is not None:
             if not self._busy:
-                self.status_badge.set_state("connected", f"Подключено · {tunnel.ip}")
+                self.status_badge.set_state(
+                    "connected",
+                    f"Подключено · {tunnel.ip}",
+                    dark=self.theme_manager.is_dark,
+                )
             uptime = backend.service_uptime()
             self.uptime_label.setText(
                 f"В сети {format_duration(uptime)}" if uptime is not None and not self._busy else ""
@@ -1547,12 +1605,18 @@ class MainWindow(QMainWindow):
             window_title = f"{APP_NAME} — {active_profile.name if active_profile else 'VPN'}"
         elif running:
             if not self._busy:
-                self.status_badge.set_state("connecting", "Служба запущена, нет туннеля")
+                self.status_badge.set_state(
+                    "connecting",
+                    "Служба запущена, нет туннеля",
+                    dark=self.theme_manager.is_dark,
+                )
             self.uptime_label.setText("")
             window_title = f"{APP_NAME} — подключение…"
         else:
             if not self._busy:
-                self.status_badge.set_state("disconnected", "Не подключено")
+                self.status_badge.set_state(
+                    "disconnected", "Не подключено", dark=self.theme_manager.is_dark
+                )
             self.uptime_label.setText("")
             window_title = APP_NAME
         if not self._busy:
@@ -1691,7 +1755,11 @@ class MainWindow(QMainWindow):
         for action in self._busy_actions:
             action.setEnabled(not busy)
         if busy:
-            self.status_badge.set_state("connecting", message or "Выполняется…")
+            self.status_badge.set_state(
+                "connecting",
+                message or "Выполняется…",
+                dark=self.theme_manager.is_dark,
+            )
             self.uptime_label.setText("")
         self.table.setEnabled(not busy)
         for action in (self.act_edit, self.act_duplicate, self.act_delete, self.act_connect):
@@ -2015,6 +2083,23 @@ class MainWindow(QMainWindow):
             self._select_profile(dialog.result_profile.id)
 
     # -- прочее ------------------------------------------------------------
+    def _set_theme(self, mode: str) -> None:
+        selected = normalize_mode(mode)
+        self.store.settings["theme"] = selected
+        self._save_store()
+        self.theme_manager.set_mode(selected)
+        self._sync_theme_actions()
+
+    def _sync_theme_actions(self) -> None:
+        mode = self.theme_manager.mode
+        for action_mode, action in self._theme_actions.items():
+            action.setChecked(action_mode == mode)
+
+    def _on_theme_changed(self, _mode: str, _dark: bool) -> None:
+        self._sync_theme_actions()
+        self._update_helper_label()
+        self._refresh_status(initial=True)
+
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.store, self)
         if dialog.exec_() == QDialog.Accepted:
@@ -2022,17 +2107,24 @@ class MainWindow(QMainWindow):
             self._timer.setInterval(
                 int(self.store.settings.get("poll_interval_ms", 3000))
             )
+            self.theme_manager.set_mode(
+                str(self.store.settings.get("theme", "auto"))
+            )
+            self._sync_theme_actions()
             self._update_helper_label()
             self.statusBar().showMessage("Настройки сохранены", 5000)
 
     def _update_helper_label(self) -> None:
-        if backend.helper_ready():
+        ready = backend.helper_ready()
+        if ready:
             self.helper_label.setText("Помощник: установлен")
-            self.helper_label.setStyleSheet("color: #17683a;")
+            self.helper_label.setToolTip("")
         else:
             self.helper_label.setText("Помощник не установлен")
-            self.helper_label.setStyleSheet("color: #9c231e;")
             self.helper_label.setToolTip(backend.helper_problem())
+        self.helper_label.setProperty("state", "ok" if ready else "error")
+        self.helper_label.style().unpolish(self.helper_label)
+        self.helper_label.style().polish(self.helper_label)
 
     def _show_about(self) -> None:
         helper = backend.helper_path()

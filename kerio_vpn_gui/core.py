@@ -21,7 +21,9 @@ from typing import Any, Iterable, Optional
 APP_ID = "kerio-vpn-gui"
 APP_NAME = "Kerio VPN"
 APP_VERSION = "1.0.0"
-DEFAULT_IMPORT_DIR = "/media/1TB_nout/kerio"
+# Нейтральный каталог по умолчанию. Реальный путь пользователь выбирает
+# в диалоге импорта; после первого импорта он сохраняется в настройках.
+DEFAULT_IMPORT_DIR = str(Path.home() / "kerio")
 XOR_KEY = 0x55
 PASSWORD_PREFIX = "XOR:"
 PROFILES_VERSION = 1
@@ -328,6 +330,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "connect_timeout_sec": 30,
     "import_dir": DEFAULT_IMPORT_DIR,
     "autostart": False,
+    "theme": "auto",
 }
 
 
@@ -409,6 +412,8 @@ class ProfileStore:
         self.settings["show_notifications"] = bool(self.settings.get("show_notifications", True))
         self.settings["autostart"] = bool(self.settings.get("autostart", False))
         self.settings["import_dir"] = str(self.settings.get("import_dir") or DEFAULT_IMPORT_DIR)
+        theme = str(self.settings.get("theme", "auto")).strip().lower()
+        self.settings["theme"] = theme if theme in ("auto", "light", "dark") else "auto"
 
     def save(self) -> None:
         payload = {

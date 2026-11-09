@@ -100,6 +100,7 @@ class CoreTests(unittest.TestCase):
             profile = Profile.from_kerio_xml(SAMPLE, name="alpha")
             store.add(profile)
             store.settings["connect_timeout_sec"] = 45
+            store.settings["theme"] = "dark"
             store.save()
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
@@ -108,6 +109,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(loaded.profiles[0].name, "alpha")
             self.assertEqual(loaded.profiles[0].password, "test-password")
             self.assertEqual(loaded.settings["connect_timeout_sec"], 45)
+            self.assertEqual(loaded.settings["theme"], "dark")
 
     def test_unique_name_and_dedupe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
