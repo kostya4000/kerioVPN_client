@@ -31,8 +31,8 @@ tar \
     --exclude='profiles.json' \
     -czf "$ARCHIVE" \
     -C "$ROOT" \
-    kerio_vpn_gui bin helper assets tests \
-    install.sh uninstall.sh README.md .gitignore
+    kerio_vpn_gui bin helper assets tests scripts \
+    build.sh install.sh uninstall.sh README.md .gitignore
 
 echo
 echo "Готово: $ARCHIVE"
