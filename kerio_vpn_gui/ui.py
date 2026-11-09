@@ -80,6 +80,7 @@ from .core import (
     scan_directory,
 )
 from .theme import THEME_LABELS, THEME_MODES, ThemeManager, normalize_mode
+from .toast import ToastManager
 
 LOGS_DIR = backend.LOG_DIR
 ICON_COLORS = {
@@ -278,8 +279,10 @@ class ProfileDialog(QDialog):
         font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
         font.setPointSize(8)
         self.fingerprint_edit.setFont(font)
+        self.fingerprint_edit.setStyleSheet("QLineEdit { font-size: 9px; }")
         if profile:
             self.fingerprint_edit.setText(profile.fingerprint)
+            self.fingerprint_edit.setCursorPosition(0)
         self.fetch_button = QPushButton("Получить с сервера", self)
         self.fetch_button.clicked.connect(self._fetch_fingerprint)
         fingerprint_layout.addWidget(self.fingerprint_edit, 1)
@@ -706,6 +709,23 @@ class SettingsDialog(QDialog):
         self.autostart = QCheckBox("Запускать Kerio VPN при входе в систему (в трее)", self)
         self.autostart.setChecked(backend.autostart_enabled())
         behavior_layout.addWidget(self.autostart)
+
+        self.passwordless = QCheckBox(
+            "Не запрашивать пароль администратора при подключении", self
+        )
+        self.passwordless.setToolTip(
+            "Устанавливает правило polkit, разрешающее вашему пользователю "
+            "запускать только служебный помощник kvc-helper без пароля. "
+            "Действует для подключения, отключения и перезапуска службы."
+        )
+        self.passwordless.setChecked(backend.passwordless_enabled())
+        if not backend.helper_supports_passwordless():
+            self.passwordless.setEnabled(False)
+            self.passwordless.setToolTip(
+                "Установленный помощник не поддерживает эту функцию. "
+                "Обновите его командой ./install.sh."
+            )
+        behavior_layout.addWidget(self.passwordless)
         layout.addWidget(behavior)
 
         theme_box = QGroupBox("Оформление", self)
@@ -797,6 +817,17 @@ class SettingsDialog(QDialog):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _accept(self) -> None:
+        passwordless_changed = (
+            self.passwordless.isChecked() != backend.passwordless_enabled()
+        )
+        if passwordless_changed:
+            try:
+                backend.set_passwordless(self.passwordless.isChecked())
+            except backend.BackendError as exc:
+                QMessageBox.warning(self, "Правило polkit", str(exc))
+                self.passwordless.setChecked(backend.passwordless_enabled())
+                return
+
         autostart_changed = self.autostart.isChecked() != backend.autostart_enabled()
         try:
             if autostart_changed:
@@ -844,14 +875,14 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._tray_hint_shown = False
         self._tray_signature = None
-        self._last_connected: Optional[bool] = None
+        self._notified_connected: Optional[bool] = None
         self._connect_name = connect_name
         self._settings = QSettings("kerio-vpn-gui", "kerio-vpn-gui")
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(make_app_icon())
-        self.resize(1020, 760)
-        self.setMinimumSize(820, 600)
+        self.resize(1080, 800)
+        self.setMinimumSize(900, 650)
 
         self._icon_connected = make_app_icon(True, False)
         self._icon_connecting = make_app_icon(False, True)
@@ -866,6 +897,7 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self.theme_manager.mode_changed.connect(self._on_theme_changed)
         self._sync_theme_actions()
+        self.toast_manager = ToastManager(self._show_window, self)
         self._restore_window_state()
 
         self._refresh_table()
@@ -1125,7 +1157,7 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(QHeaderView.Interactive)
         header_view.setMinimumSectionSize(55)
         header_view.setStretchLastSection(False)
-        for column, width in enumerate((150, 190, 95, 85)):
+        for column, width in enumerate((150, 190, 115, 90)):
             self.table.setColumnWidth(column, width)
         self.table.itemSelectionChanged.connect(self._update_details)
         self.table.itemDoubleClicked.connect(lambda *_: self._connect_selected())
@@ -1168,7 +1200,7 @@ class MainWindow(QMainWindow):
         fingerprint_font.setPointSize(8)
         self.detail_fingerprint.setFont(fingerprint_font)
         self.detail_fingerprint.setStyleSheet(
-            "QLineEdit { background: transparent; padding: 0; }"
+            "QLineEdit { background: transparent; padding: 0; font-size: 10px; }"
         )
         self.detail_fingerprint.setToolTip("Отпечаток сертификата")
         self.detail_notes = self._value_label(details_box)
@@ -1357,29 +1389,29 @@ class MainWindow(QMainWindow):
 
     # -- восстановление геометрии -----------------------------------------
     def _restore_window_state(self) -> None:
-        geometry = self._settings.value("window/geometry")
+        geometry = self._settings.value("window/geometry_v2")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        state = self._settings.value("window/splitter")
+        state = self._settings.value("window/splitter_v2")
         if state is not None:
             self.main_splitter.restoreState(state)
-        horizontal = self._settings.value("window/top_splitter")
+        horizontal = self._settings.value("window/top_splitter_v2")
         if horizontal is not None and self.main_splitter.widget(0) is not None:
             top = self.main_splitter.widget(0)
             if isinstance(top, QSplitter):
                 top.restoreState(horizontal)
-        header_state = self._settings.value("window/table_header")
+        header_state = self._settings.value("window/table_header_v2")
         if header_state is not None:
             self.table.horizontalHeader().restoreState(header_state)
 
     def _save_window_state(self) -> None:
-        self._settings.setValue("window/geometry", self.saveGeometry())
-        self._settings.setValue("window/splitter", self.main_splitter.saveState())
+        self._settings.setValue("window/geometry_v2", self.saveGeometry())
+        self._settings.setValue("window/splitter_v2", self.main_splitter.saveState())
         top = self.main_splitter.widget(0)
         if isinstance(top, QSplitter):
-            self._settings.setValue("window/top_splitter", top.saveState())
+            self._settings.setValue("window/top_splitter_v2", top.saveState())
         self._settings.setValue(
-            "window/table_header", self.table.horizontalHeader().saveState()
+            "window/table_header_v2", self.table.horizontalHeader().saveState()
         )
 
     # -- журналы -----------------------------------------------------------
@@ -1585,8 +1617,6 @@ class MainWindow(QMainWindow):
         )
         self._active_profile_id = active_profile.id if active_profile else None
 
-        previous_connected = self._last_connected
-        was_running = self._running
         self._running = running
         self._connected = connected
         self._tunnel = tunnel
@@ -1649,18 +1679,23 @@ class MainWindow(QMainWindow):
         self._update_details()
         self._rebuild_tray_menu()
 
-        if not initial and previous_connected is not None:
-            if connected and not previous_connected and not self._busy:
+        if initial or self._notified_connected is None:
+            self._notified_connected = connected
+        elif not self._busy and connected != self._notified_connected:
+            if connected:
                 name = active_profile.name if active_profile else "VPN"
                 self._notify(
                     "VPN подключён",
                     f"{name}\nIP: {tunnel.ip}" if tunnel is not None else name,
+                    "success",
                 )
-            elif not connected and previous_connected and not self._busy:
-                self._notify("VPN отключён", "Соединение с Kerio Control прервано.")
-        if initial and was_running != running:
-            self._update_details()
-        self._last_connected = connected
+            else:
+                self._notify(
+                    "VPN отключён",
+                    "Соединение с Kerio Control прервано.",
+                    "warning",
+                )
+            self._notified_connected = connected
 
     # -- трей --------------------------------------------------------------
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -1742,11 +1777,10 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(quit_action)
 
-    def _notify(self, title: str, message: str) -> None:
+    def _notify(self, title: str, message: str, kind: str = "info") -> None:
         if not self.store.settings.get("show_notifications", True):
             return
-        if self.tray is not None and self.tray.isVisible():
-            self.tray.showMessage(title, message, QSystemTrayIcon.Information, 5000)
+        self.toast_manager.show_message(title, message, kind)
 
     # -- занятость ---------------------------------------------------------
     def _set_busy(self, busy: bool, message: str = "") -> None:
@@ -1857,6 +1891,7 @@ class MainWindow(QMainWindow):
             self.store.save()
         except StoreError as exc:
             QMessageBox.warning(self, "Профили", str(exc))
+        self._notified_connected = True
         self._set_busy(False)
         self._refresh_table()
         self._select_profile(profile.id)
@@ -1870,6 +1905,7 @@ class MainWindow(QMainWindow):
         self._notify(
             "VPN подключён",
             f"{profile.name}\nIP: {ip}" if ip else profile.name,
+            "success",
         )
 
     def _connect_failed(self, message: str) -> None:
@@ -1907,10 +1943,11 @@ class MainWindow(QMainWindow):
 
     def _disconnect_finished(self, _result: object = None) -> None:
         self._worker = None
+        self._notified_connected = False
         self._set_busy(False)
         self._refresh_status()
         self.statusBar().showMessage("VPN отключён", 6000)
-        self._notify("VPN отключён", "Служба Kerio VPN остановлена.")
+        self._notify("VPN отключён", "Служба Kerio VPN остановлена.", "info")
 
     def _restart_service(self) -> None:
         if self._busy:
@@ -2156,6 +2193,7 @@ class MainWindow(QMainWindow):
             return
         self._closing = True
         self._save_window_state()
+        self.toast_manager.close_all()
         if self.tray is not None:
             self.tray.hide()
         QApplication.quit()

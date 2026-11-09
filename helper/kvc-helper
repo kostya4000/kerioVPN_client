@@ -12,6 +12,8 @@ CONF=/etc/kerio-kvc.conf
 INIT=/etc/init.d/kerio-kvc
 LOG=/var/log/kerio-kvc/debug.log
 IFACE=kvnet
+RULE_DIR=/etc/polkit-1/rules.d
+RULE_FILE="$RULE_DIR/49-kerio-vpn-gui.rules"
 
 log() {
     logger -t kerio-vpn-gui -- "$*" 2>/dev/null || true
@@ -24,6 +26,54 @@ die() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "помощник должен запускаться от root (через pkexec)"
+
+js_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+caller_user() {
+    uid=${PKEXEC_UID:-${SUDO_UID:-}}
+    [ -n "$uid" ] || return 1
+    name=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)
+    [ -n "$name" ] || name=$(id -nu "$uid" 2>/dev/null)
+    [ -n "$name" ] || return 1
+    printf '%s\n' "$name"
+}
+
+enable_passwordless() {
+    user=$(caller_user) || die "не удалось определить пользователя для правила polkit"
+    helper=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+    [ -d "$RULE_DIR" ] || die "каталог $RULE_DIR не найден (polkit установлен?)"
+
+    user_js=$(js_escape "$user")
+    helper_js=$(js_escape "$helper")
+    tmp="${RULE_FILE}.tmp.$$"
+    cat >"$tmp" <<EOF
+/* Kerio VPN GUI: passwordless execution of kvc-helper only. */
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        action.lookup("program") == "$helper_js" &&
+        action.lookup("user") == "root" &&
+        subject.user == "$user_js") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+    chown root:root "$tmp" 2>/dev/null || true
+    chmod 644 "$tmp" || { rm -f "$tmp"; die "не удалось установить права на правило polkit"; }
+    mv -f "$tmp" "$RULE_FILE" || { rm -f "$tmp"; die "не удалось записать $RULE_FILE"; }
+    # Даём polkitd время подхватить изменение правила.
+    sleep 0.5
+    log "passwordless login enabled for $user"
+    echo "OK: $user"
+}
+
+disable_passwordless() {
+    rm -f "$RULE_FILE" || die "не удалось удалить $RULE_FILE"
+    sleep 0.3
+    log "passwordless login disabled"
+    echo "OK"
+}
 
 stop_kvc() {
     # Сначала останавливаем unit, если службой управляет systemd,
@@ -152,8 +202,14 @@ case "$1" in
         log "service restarted"
         echo "OK"
         ;;
+    enable-passwordless)
+        enable_passwordless
+        ;;
+    disable-passwordless)
+        disable_passwordless
+        ;;
     *)
-        echo "Использование: $0 {connect <config> <0|1>|disconnect|restart}" >&2
+        echo "Использование: $0 {connect <config> <0|1>|disconnect|restart|enable-passwordless|disable-passwordless}" >&2
         exit 2
         ;;
 esac

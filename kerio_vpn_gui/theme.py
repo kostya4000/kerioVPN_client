@@ -198,7 +198,7 @@ def _stylesheet(c: ThemeColors) -> str:
 
     QWidget {{
         color: {c.text};
-        font-size: 13px;
+        font-size: 14px;
     }}
     QMainWindow, QDialog {{ background: {c.window}; }}
 
@@ -435,6 +435,30 @@ def _stylesheet(c: ThemeColors) -> str:
     QLabel#warningLabel {{ color: {c.warning}; }}
     QLabel[state="ok"] {{ color: {c.success}; }}
     QLabel[state="error"] {{ color: {c.danger}; }}
+
+    QFrame#toast {{
+        background: {c.card};
+        border: 1px solid {c.border};
+        border-radius: 12px;
+    }}
+    QLabel#toastTitle {{
+        color: {c.text};
+        font-size: 15px;
+        font-weight: 600;
+    }}
+    QLabel#toastBody {{
+        color: {c.muted};
+        font-size: 14px;
+    }}
+    QToolButton#toastClose {{
+        background: transparent;
+        border: none;
+        color: {c.muted};
+        font-size: 18px;
+        padding: 0 4px;
+        min-width: 18px;
+    }}
+    QToolButton#toastClose:hover {{ color: {c.text}; }}
 
     QCheckBox {{ spacing: 7px; }}
     QCheckBox::indicator {{

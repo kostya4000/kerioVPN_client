@@ -31,6 +31,7 @@ HELPER_CANDIDATES = (
     Path("/usr/local/lib/kerio-vpn-gui/kvc-helper"),
     Path("/usr/lib/kerio-vpn-gui/kvc-helper"),
 )
+POLKIT_RULE = Path("/etc/polkit-1/rules.d/49-kerio-vpn-gui.rules")
 
 
 def autostart_path() -> Path:
@@ -466,6 +467,49 @@ def disconnect(timeout: float = 20, progress: ProgressCallback = None) -> None:
 def restart(progress: ProgressCallback = None) -> None:
     _progress(progress, "Перезапуск службы…")
     _run_helper("restart", timeout=90)
+
+
+# ---------------------------------------------------------------------------
+# Подключение без запроса пароля (правило polkit)
+# ---------------------------------------------------------------------------
+
+
+def passwordless_enabled() -> bool:
+    """Проверяет, установлено ли правило polkit для текущего пользователя."""
+    try:
+        text = POLKIT_RULE.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    helper = helper_path()
+    if helper is None:
+        return False
+    try:
+        import pwd
+
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        return False
+    if f'subject.user == "{user}"' not in text:
+        return False
+    return os.path.realpath(helper) in text or str(helper) in text
+
+
+def set_passwordless(enabled: bool) -> None:
+    """Включает/выключает правило polkit (может потребовать один запрос пароля)."""
+    action = "enable-passwordless" if enabled else "disable-passwordless"
+    _run_helper(action, timeout=120)
+
+
+def helper_supports_passwordless() -> bool:
+    """Проверяет, умеет ли установленный помощник управлять правилом polkit."""
+    helper = helper_path()
+    if helper is None:
+        return False
+    try:
+        text = helper.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "enable-passwordless" in text and "disable-passwordless" in text
 
 
 # ---------------------------------------------------------------------------
