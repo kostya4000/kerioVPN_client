@@ -718,7 +718,10 @@ class SettingsDialog(QDialog):
             "запускать только служебный помощник kvc-helper без пароля. "
             "Действует для подключения, отключения и перезапуска службы."
         )
-        self.passwordless.setChecked(backend.passwordless_enabled())
+        self.passwordless.setChecked(
+            bool(store.settings.get("passwordless", False))
+            or backend.passwordless_enabled()
+        )
         if not backend.helper_supports_passwordless():
             self.passwordless.setEnabled(False)
             self.passwordless.setToolTip(
@@ -823,16 +826,19 @@ class SettingsDialog(QDialog):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _accept(self) -> None:
-        passwordless_changed = (
-            self.passwordless.isChecked() != backend.passwordless_enabled()
+        current_passwordless = (
+            bool(self.store.settings.get("passwordless", False))
+            or backend.passwordless_enabled()
         )
+        passwordless_changed = self.passwordless.isChecked() != current_passwordless
         if passwordless_changed:
             try:
                 backend.set_passwordless(self.passwordless.isChecked())
             except backend.BackendError as exc:
                 QMessageBox.warning(self, "Правило polkit", str(exc))
-                self.passwordless.setChecked(backend.passwordless_enabled())
+                self.passwordless.setChecked(current_passwordless)
                 return
+        self.store.settings["passwordless"] = self.passwordless.isChecked()
 
         autostart_changed = self.autostart.isChecked() != backend.autostart_enabled()
         try:

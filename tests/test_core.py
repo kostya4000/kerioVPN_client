@@ -102,6 +102,7 @@ class CoreTests(unittest.TestCase):
             store.settings["connect_timeout_sec"] = 45
             store.settings["theme"] = "dark"
             store.settings["font_size"] = 18
+            store.settings["passwordless"] = True
             store.save()
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
@@ -112,6 +113,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(loaded.settings["connect_timeout_sec"], 45)
             self.assertEqual(loaded.settings["theme"], "dark")
             self.assertEqual(loaded.settings["font_size"], 18)
+            self.assertTrue(loaded.settings["passwordless"])
 
     def test_font_size_coerced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
