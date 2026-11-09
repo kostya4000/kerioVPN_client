@@ -13,3 +13,6 @@ env/
 .DS_Store
 *.log
 profiles.json
+
+dist/
+*.tar.gz

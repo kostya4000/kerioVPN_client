@@ -139,7 +139,7 @@ class StatusBadge(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("statusBadge")
-        self.setFixedHeight(30)
+        self.setMinimumHeight(30)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 14, 0)
         layout.setSpacing(8)
@@ -226,7 +226,7 @@ class ProfileDialog(QDialog):
             title = "Изменить профиль"
         self.setWindowTitle(title)
         self.setWindowIcon(make_app_icon())
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(640)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -687,7 +687,7 @@ class SettingsDialog(QDialog):
         self.store = store
         self.setWindowTitle("Настройки")
         self.setWindowIcon(make_app_icon())
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(680)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -738,6 +738,12 @@ class SettingsDialog(QDialog):
             max(0, self.theme_combo.findData(current_theme))
         )
         theme_layout.addRow("Тема:", self.theme_combo)
+
+        self.font_spin = QSpinBox(self)
+        self.font_spin.setRange(11, 18)
+        self.font_spin.setSuffix(" px")
+        self.font_spin.setValue(int(store.settings.get("font_size", 14)))
+        theme_layout.addRow("Размер шрифта:", self.font_spin)
         layout.addWidget(theme_box)
 
         polling = QGroupBox("Обновление и подключение", self)
@@ -843,6 +849,7 @@ class SettingsDialog(QDialog):
         self.store.settings["import_dir"] = self.import_edit.text().strip() or DEFAULT_IMPORT_DIR
         self.store.settings["autostart"] = self.autostart.isChecked()
         self.store.settings["theme"] = self.theme_combo.currentData() or "auto"
+        self.store.settings["font_size"] = self.font_spin.value()
         self.accept()
 
 
@@ -862,8 +869,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.theme_manager = ThemeManager(
-            str(store.settings.get("theme", "auto")), self
+            str(store.settings.get("theme", "auto")),
+            int(store.settings.get("font_size", 14)),
+            self,
         )
+        self._last_font_size = self.theme_manager.font_size
         self._busy = False
         self._worker: Optional[Worker] = None
         self._fetch_worker: Optional[Worker] = None
@@ -895,7 +905,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_tray()
-        self.theme_manager.mode_changed.connect(self._on_theme_changed)
+        self.theme_manager.style_changed.connect(self._on_theme_changed)
         self._sync_theme_actions()
         self.toast_manager = ToastManager(self._show_window, self)
         self._restore_window_state()
@@ -1157,8 +1167,9 @@ class MainWindow(QMainWindow):
         header_view.setSectionResizeMode(QHeaderView.Interactive)
         header_view.setMinimumSectionSize(55)
         header_view.setStretchLastSection(False)
+        scale = self.theme_manager.font_size / 14.0
         for column, width in enumerate((150, 190, 115, 90)):
-            self.table.setColumnWidth(column, width)
+            self.table.setColumnWidth(column, max(55, int(round(width * scale))))
         self.table.itemSelectionChanged.connect(self._update_details)
         self.table.itemDoubleClicked.connect(lambda *_: self._connect_selected())
         profiles_layout.addWidget(self.table, 1)
@@ -1403,6 +1414,16 @@ class MainWindow(QMainWindow):
         header_state = self._settings.value("window/table_header_v2")
         if header_state is not None:
             self.table.horizontalHeader().restoreState(header_state)
+            saved_font = self._settings.value("window/table_font_size")
+            try:
+                saved_font_size = int(saved_font)
+            except (TypeError, ValueError):
+                saved_font_size = self._last_font_size
+            if saved_font_size > 0 and saved_font_size != self._last_font_size:
+                ratio = self._last_font_size / float(saved_font_size)
+                for column in range(self.table.columnCount()):
+                    width = max(55, int(round(self.table.columnWidth(column) * ratio)))
+                    self.table.setColumnWidth(column, width)
 
     def _save_window_state(self) -> None:
         self._settings.setValue("window/geometry_v2", self.saveGeometry())
@@ -1412,6 +1433,9 @@ class MainWindow(QMainWindow):
             self._settings.setValue("window/top_splitter_v2", top.saveState())
         self._settings.setValue(
             "window/table_header_v2", self.table.horizontalHeader().saveState()
+        )
+        self._settings.setValue(
+            "window/table_font_size", self.theme_manager.font_size
         )
 
     # -- журналы -----------------------------------------------------------
@@ -2132,7 +2156,20 @@ class MainWindow(QMainWindow):
         for action_mode, action in self._theme_actions.items():
             action.setChecked(action_mode == mode)
 
-    def _on_theme_changed(self, _mode: str, _dark: bool) -> None:
+    def _on_theme_changed(self, _mode: str = "", _dark: bool = False) -> None:
+        new_size = self.theme_manager.font_size
+        if new_size != self._last_font_size:
+            delta = new_size - self._last_font_size
+            if delta and not self.isMaximized():
+                self.resize(
+                    max(self.minimumWidth(), self.width() + delta * 60),
+                    max(self.minimumHeight(), self.height() + delta * 8),
+                )
+            ratio = new_size / float(self._last_font_size)
+            for column in range(self.table.columnCount()):
+                width = max(55, int(round(self.table.columnWidth(column) * ratio)))
+                self.table.setColumnWidth(column, width)
+            self._last_font_size = new_size
         self._sync_theme_actions()
         self._update_helper_label()
         self._refresh_status(initial=True)
@@ -2146,6 +2183,9 @@ class MainWindow(QMainWindow):
             )
             self.theme_manager.set_mode(
                 str(self.store.settings.get("theme", "auto"))
+            )
+            self.theme_manager.set_font_size(
+                int(self.store.settings.get("font_size", 14))
             )
             self._sync_theme_actions()
             self._update_helper_label()

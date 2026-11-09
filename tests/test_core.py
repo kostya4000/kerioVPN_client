@@ -101,6 +101,7 @@ class CoreTests(unittest.TestCase):
             store.add(profile)
             store.settings["connect_timeout_sec"] = 45
             store.settings["theme"] = "dark"
+            store.settings["font_size"] = 18
             store.save()
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
@@ -110,6 +111,17 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(loaded.profiles[0].password, "test-password")
             self.assertEqual(loaded.settings["connect_timeout_sec"], 45)
             self.assertEqual(loaded.settings["theme"], "dark")
+            self.assertEqual(loaded.settings["font_size"], 18)
+
+    def test_font_size_coerced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ProfileStore(Path(temporary) / "profiles.json")
+            store.settings["font_size"] = 99
+            store._coerce_settings()
+            self.assertEqual(store.settings["font_size"], 18)
+            store.settings["font_size"] = "abc"
+            store._coerce_settings()
+            self.assertEqual(store.settings["font_size"], 14)
 
     def test_unique_name_and_dedupe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

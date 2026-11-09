@@ -192,13 +192,13 @@ def _palette(colors: ThemeColors) -> QPalette:
     return palette
 
 
-def _stylesheet(c: ThemeColors) -> str:
+def _stylesheet(c: ThemeColors, font_size: int = 14) -> str:
     return f"""
     * {{ outline: 0; }}
 
     QWidget {{
         color: {c.text};
-        font-size: 14px;
+        font-size: {font_size}px;
     }}
     QMainWindow, QDialog {{ background: {c.window}; }}
 
@@ -429,6 +429,7 @@ def _stylesheet(c: ThemeColors) -> str:
         border: 1px solid {c.border};
         border-radius: 6px;
         padding: 5px 7px;
+        font-size: {font_size}px;
     }}
 
     QLabel#mutedLabel {{ color: {c.muted}; }}
@@ -443,18 +444,18 @@ def _stylesheet(c: ThemeColors) -> str:
     }}
     QLabel#toastTitle {{
         color: {c.text};
-        font-size: 15px;
+        font-size: {font_size + 1}px;
         font-weight: 600;
     }}
     QLabel#toastBody {{
         color: {c.muted};
-        font-size: 14px;
+        font-size: {font_size}px;
     }}
     QToolButton#toastClose {{
         background: transparent;
         border: none;
         color: {c.muted};
-        font-size: 18px;
+        font-size: {font_size + 4}px;
         padding: 0 4px;
         min-width: 18px;
     }}
@@ -487,10 +488,17 @@ def _stylesheet(c: ThemeColors) -> str:
 
 class ThemeManager(QObject):
     mode_changed = pyqtSignal(str, bool)
+    style_changed = pyqtSignal()
 
-    def __init__(self, mode: str = "auto", parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self,
+        mode: str = "auto",
+        font_size: int = 14,
+        parent: Optional[QObject] = None,
+    ) -> None:
         super().__init__(parent)
         self._mode = normalize_mode(mode)
+        self._font_size = self._clamp_font_size(font_size)
         self._dark = False
         self._timer = QTimer(self)
         self._timer.setInterval(8000)
@@ -498,9 +506,20 @@ class ThemeManager(QObject):
         self._timer.start()
         self.apply()
 
+    @staticmethod
+    def _clamp_font_size(value: int) -> int:
+        try:
+            return max(11, min(18, int(value)))
+        except (TypeError, ValueError):
+            return 14
+
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def font_size(self) -> int:
+        return self._font_size
 
     @property
     def is_dark(self) -> bool:
@@ -519,6 +538,13 @@ class ThemeManager(QObject):
         self._mode = normalized
         self.apply()
 
+    def set_font_size(self, size: int) -> None:
+        clamped = self._clamp_font_size(size)
+        if clamped == self._font_size:
+            return
+        self._font_size = clamped
+        self.apply()
+
     def apply(self) -> None:
         app = QApplication.instance()
         if app is None:
@@ -527,9 +553,10 @@ class ThemeManager(QObject):
         if app.style().objectName().lower() != "fusion":
             app.setStyle("Fusion")
         app.setPalette(_palette(DARK if dark else LIGHT))
-        app.setStyleSheet(_stylesheet(DARK if dark else LIGHT))
+        app.setStyleSheet(_stylesheet(DARK if dark else LIGHT, self._font_size))
         changed = dark != self._dark
         self._dark = dark
+        self.style_changed.emit()
         if changed or self._mode == "auto":
             self.mode_changed.emit(self._mode, dark)
 

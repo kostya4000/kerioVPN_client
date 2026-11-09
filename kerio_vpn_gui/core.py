@@ -20,7 +20,7 @@ from typing import Any, Iterable, Optional
 
 APP_ID = "kerio-vpn-gui"
 APP_NAME = "Kerio VPN"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.2.2"
 # Нейтральный каталог по умолчанию. Реальный путь пользователь выбирает
 # в диалоге импорта; после первого импорта он сохраняется в настройках.
 DEFAULT_IMPORT_DIR = str(Path.home() / "kerio")
@@ -331,6 +331,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "import_dir": DEFAULT_IMPORT_DIR,
     "autostart": False,
     "theme": "auto",
+    "font_size": 14,
 }
 
 
@@ -414,6 +415,10 @@ class ProfileStore:
         self.settings["import_dir"] = str(self.settings.get("import_dir") or DEFAULT_IMPORT_DIR)
         theme = str(self.settings.get("theme", "auto")).strip().lower()
         self.settings["theme"] = theme if theme in ("auto", "light", "dark") else "auto"
+        try:
+            self.settings["font_size"] = max(11, min(18, int(self.settings.get("font_size", 14))))
+        except (TypeError, ValueError):
+            self.settings["font_size"] = 14
 
     def save(self) -> None:
         payload = {
