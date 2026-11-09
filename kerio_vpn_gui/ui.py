@@ -1660,13 +1660,31 @@ class MainWindow(QMainWindow):
     def _update_toggle_action(self) -> None:
         running = self._running
         profile = self._selected_profile()
-        self.act_toggle.setText("Отключить" if running else "Подключить")
-        self.act_toggle.setIcon(
-            self.act_disconnect.icon() if running else self.act_connect.icon()
+        active_here = (
+            profile is not None and self._active_profile_id == profile.id
         )
-        self.act_toggle.setEnabled(not self._busy and (running or profile is not None))
-        self.act_toggle.setToolTip(
-            "Отключить VPN" if running else "Подключить выбранный профиль"
+        if running and active_here:
+            text = "Отключить"
+            icon = self.act_disconnect.icon()
+            tooltip = "Отключить VPN для выбранного профиля"
+        elif running and profile is not None:
+            text = "Переключиться"
+            icon = self.act_connect.icon()
+            tooltip = "Переключиться на выбранный профиль"
+        elif running:
+            text = "Отключить"
+            icon = self.act_disconnect.icon()
+            tooltip = "Отключить VPN"
+        else:
+            text = "Подключить"
+            icon = self.act_connect.icon()
+            tooltip = "Подключить выбранный профиль"
+
+        self.act_toggle.setText(text)
+        self.act_toggle.setIcon(icon)
+        self.act_toggle.setToolTip(tooltip)
+        self.act_toggle.setEnabled(
+            not self._busy and (running or profile is not None)
         )
 
     # -- статус ------------------------------------------------------------
@@ -1890,12 +1908,7 @@ class MainWindow(QMainWindow):
             self._connect_profile(profile)
 
     def _toggle_connection(self) -> None:
-        if self._busy:
-            return
-        if self._running:
-            self._disconnect()
-        else:
-            self._connect_selected()
+        self._primary_action()
 
     def _primary_action(self) -> None:
         if self._busy:
