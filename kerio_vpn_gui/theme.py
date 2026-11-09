@@ -318,7 +318,14 @@ def _stylesheet(c: ThemeColors, font_size: int = 14) -> str:
     }}
     QPushButton#connectButton:hover {{ background: {c.accent_hover}; }}
     QPushButton#connectButton:pressed {{ background: {c.accent_pressed}; }}
+    QPushButton#connectButton[danger="true"] {{ background: {c.danger}; }}
+    QPushButton#connectButton[danger="true"]:hover {{ background: {c.danger}; }}
+    QPushButton#connectButton[danger="true"]:pressed {{ background: {c.danger}; }}
     QPushButton#connectButton:disabled {{
+        background: {c.border};
+        color: {c.muted};
+    }}
+    QPushButton#connectButton[danger="true"]:disabled {{
         background: {c.border};
         color: {c.muted};
     }}

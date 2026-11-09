@@ -226,7 +226,7 @@ class ProfileDialog(QDialog):
             title = "Изменить профиль"
         self.setWindowTitle(title)
         self.setWindowIcon(make_app_icon())
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(720)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -276,10 +276,9 @@ class ProfileDialog(QDialog):
         fingerprint_layout.setSpacing(8)
         self.fingerprint_edit = QLineEdit(self)
         self.fingerprint_edit.setPlaceholderText("AA:BB:CC:…:FF")
-        font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        font.setPointSize(8)
-        self.fingerprint_edit.setFont(font)
-        self.fingerprint_edit.setStyleSheet("QLineEdit { font-size: 9px; }")
+        self.fingerprint_edit.setFont(
+            QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        )
         if profile:
             self.fingerprint_edit.setText(profile.fingerprint)
             self.fingerprint_edit.setCursorPosition(0)
@@ -351,6 +350,7 @@ class ProfileDialog(QDialog):
 
     def _update_warning(self) -> None:
         value = self.fingerprint_edit.text().strip()
+        self.fingerprint_edit.setToolTip(value)
         if not value:
             self.warning_label.setText(
                 "Отпечаток не указан. Нажмите «Получить с сервера», иначе "
@@ -1005,6 +1005,12 @@ class MainWindow(QMainWindow):
         self.act_disconnect.setShortcut(QKeySequence("Ctrl+D"))
         self.act_disconnect.triggered.connect(self._disconnect)
 
+        self.act_toggle = QAction(
+            self.act_connect.icon(), "Подключить", self
+        )
+        self.act_toggle.setToolTip("Подключить выбранный профиль")
+        self.act_toggle.triggered.connect(self._toggle_connection)
+
         self.act_restart = QAction(
             self._theme_icon(("view-refresh", "reload"), QStyle.SP_BrowserReload),
             "Перезапустить службу",
@@ -1092,6 +1098,7 @@ class MainWindow(QMainWindow):
             self.act_delete,
             self.act_connect,
             self.act_disconnect,
+            self.act_toggle,
             self.act_restart,
             self.act_import,
             self.act_import_file,
@@ -1213,11 +1220,11 @@ class MainWindow(QMainWindow):
         self.detail_fingerprint = QLineEdit(details_box)
         self.detail_fingerprint.setReadOnly(True)
         self.detail_fingerprint.setFrame(False)
-        fingerprint_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        fingerprint_font.setPointSize(8)
-        self.detail_fingerprint.setFont(fingerprint_font)
+        self.detail_fingerprint.setFont(
+            QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        )
         self.detail_fingerprint.setStyleSheet(
-            "QLineEdit { background: transparent; padding: 0; font-size: 10px; }"
+            "QLineEdit { background: transparent; padding: 0; }"
         )
         self.detail_fingerprint.setToolTip("Отпечаток сертификата")
         self.detail_notes = self._value_label(details_box)
@@ -1239,7 +1246,7 @@ class MainWindow(QMainWindow):
         self.connect_button = QPushButton("Подключить", details_box)
         self.connect_button.setObjectName("connectButton")
         self.connect_button.setMinimumHeight(34)
-        self.connect_button.clicked.connect(self._connect_selected)
+        self.connect_button.clicked.connect(self._primary_action)
         buttons_grid.addWidget(self.connect_button, 0, 0, 1, 2)
 
         self.edit_button = QPushButton("Изменить", details_box)
@@ -1324,7 +1331,7 @@ class MainWindow(QMainWindow):
         return fingerprint
 
     def _set_fingerprint_label(self, text: str) -> None:
-        flat = text.replace("\n", " ")
+        flat = text.replace("\n", "")
         self.detail_fingerprint.setText(flat)
         self.detail_fingerprint.setCursorPosition(0)
         self.detail_fingerprint.setToolTip(flat)
@@ -1379,8 +1386,7 @@ class MainWindow(QMainWindow):
             self.act_edit,
             self.act_delete,
             None,
-            self.act_connect,
-            self.act_disconnect,
+            self.act_toggle,
             None,
             self.act_import,
             self.act_settings,
@@ -1582,11 +1588,14 @@ class MainWindow(QMainWindow):
             self._set_fingerprint_label("—")
             self.detail_notes.setText("—")
             self.detail_state.setText("")
+            self.connect_button.setText("Подключить")
+            self._set_connect_button_danger(False)
             self.connect_button.setEnabled(False)
             self.edit_button.setEnabled(False)
             self.duplicate_button.setEnabled(False)
             self.delete_button.setEnabled(False)
             self.copy_button.setEnabled(False)
+            self._update_toggle_action()
             return
 
         self.detail_name.setText(profile.name)
@@ -1601,25 +1610,35 @@ class MainWindow(QMainWindow):
         self.detail_notes.setText(profile.notes or "—")
         self.detail_notes.setToolTip(profile.notes or "")
 
-        if self._active_profile_id == profile.id and self._connected and self._tunnel:
-            colors = self.theme_manager.colors
+        colors = self.theme_manager.colors
+        active_here = self._active_profile_id == profile.id
+        if active_here and self._connected and self._tunnel:
             self.detail_state.setText(
                 f"<span style='color:{colors.success}; font-weight:600;'>Подключено</span>"
                 f" · IP {self._tunnel.address}"
             )
-            self.connect_button.setText("Переподключить")
+        elif active_here and self._running:
+            self.detail_state.setText(
+                f"<span style='color:{colors.warning};'>Служба запущена, туннель не поднят</span>"
+            )
         elif self._running:
-            colors = self.theme_manager.colors
             self.detail_state.setText(
                 f"<span style='color:{colors.warning};'>Активно другое подключение</span>"
             )
-            self.connect_button.setText("Переключиться")
         else:
-            colors = self.theme_manager.colors
             self.detail_state.setText(
                 f"<span style='color:{colors.muted};'>Не подключено</span>"
             )
+
+        if self._running and active_here:
+            self.connect_button.setText("Отключить")
+            self._set_connect_button_danger(True)
+        elif self._running:
+            self.connect_button.setText("Переключиться")
+            self._set_connect_button_danger(False)
+        else:
             self.connect_button.setText("Подключить")
+            self._set_connect_button_danger(False)
 
         self.connect_button.setEnabled(not self._busy)
         for button in (
@@ -1629,6 +1648,26 @@ class MainWindow(QMainWindow):
             self.copy_button,
         ):
             button.setEnabled(not self._busy)
+        self._update_toggle_action()
+
+    def _set_connect_button_danger(self, danger: bool) -> None:
+        if bool(self.connect_button.property("danger")) == danger:
+            return
+        self.connect_button.setProperty("danger", danger)
+        self.connect_button.style().unpolish(self.connect_button)
+        self.connect_button.style().polish(self.connect_button)
+
+    def _update_toggle_action(self) -> None:
+        running = self._running
+        profile = self._selected_profile()
+        self.act_toggle.setText("Отключить" if running else "Подключить")
+        self.act_toggle.setIcon(
+            self.act_disconnect.icon() if running else self.act_connect.icon()
+        )
+        self.act_toggle.setEnabled(not self._busy and (running or profile is not None))
+        self.act_toggle.setToolTip(
+            "Отключить VPN" if running else "Подключить выбранный профиль"
+        )
 
     # -- статус ------------------------------------------------------------
     def _refresh_status(self, initial: bool = False) -> None:
@@ -1848,6 +1887,27 @@ class MainWindow(QMainWindow):
     def _connect_selected(self) -> None:
         profile = self._selected_profile()
         if profile is not None:
+            self._connect_profile(profile)
+
+    def _toggle_connection(self) -> None:
+        if self._busy:
+            return
+        if self._running:
+            self._disconnect()
+        else:
+            self._connect_selected()
+
+    def _primary_action(self) -> None:
+        if self._busy:
+            return
+        profile = self._selected_profile()
+        if profile is None:
+            if self._running:
+                self._disconnect()
+            return
+        if self._running and self._active_profile_id == profile.id:
+            self._disconnect()
+        else:
             self._connect_profile(profile)
 
     def _connect_profile_id(self, profile_id: str) -> None:
