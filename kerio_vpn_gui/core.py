@@ -20,7 +20,7 @@ from typing import Any, Iterable, Optional
 
 APP_ID = "kerio-vpn-gui"
 APP_NAME = "Kerio VPN"
-APP_VERSION = "1.2.10"
+APP_VERSION = "1.2.11"
 # Нейтральный каталог по умолчанию. Реальный путь пользователь выбирает
 # в диалоге импорта; после первого импорта он сохраняется в настройках.
 DEFAULT_IMPORT_DIR = str(Path.home() / "kerio")

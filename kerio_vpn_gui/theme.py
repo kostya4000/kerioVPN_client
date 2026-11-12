@@ -449,6 +449,20 @@ def _stylesheet(c: ThemeColors, font_size: int = 14) -> str:
         border: 1px solid {c.border};
         border-radius: 12px;
     }}
+    QFrame#trayTooltip {{
+        background: {c.card};
+        border: 1px solid {c.border};
+        border-radius: 8px;
+    }}
+    QLabel#trayTooltipTitle {{
+        color: {c.text};
+        font-size: {font_size + 1}px;
+        font-weight: 600;
+    }}
+    QLabel#trayTooltipBody {{
+        color: {c.muted};
+        font-size: {font_size}px;
+    }}
     QLabel#toastTitle {{
         color: {c.text};
         font-size: {font_size + 1}px;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import traceback
 from functools import cmp_to_key
 from pathlib import Path
@@ -22,6 +23,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QFontDatabase,
     QIcon,
@@ -43,6 +45,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -180,6 +183,78 @@ class StatusBadge(QFrame):
         )
         self.dot.setStyleSheet(f"background: {dot}; border-radius: 5px;")
         self.text.setText(text)
+
+
+class TrayTooltip(QWidget):
+    """Собственная подсказка для иконки в трее (Cinnamon не показывает tooltip XEmbed)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            Qt.ToolTip
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus,
+        )
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMinimumWidth(300)
+        self.setMaximumWidth(420)
+        self._content: tuple[str, str] = ("", "")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        frame = QFrame(self)
+        frame.setObjectName("trayTooltip")
+        shadow = QGraphicsDropShadowEffect(frame)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 5)
+        shadow.setColor(QColor(0, 0, 0, 110))
+        frame.setGraphicsEffect(shadow)
+        outer.addWidget(frame)
+
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(2)
+
+        self.title_label = QLabel(frame)
+        self.title_label.setObjectName("trayTooltipTitle")
+        self.title_label.setWordWrap(True)
+        self.body_label = QLabel(frame)
+        self.body_label.setObjectName("trayTooltipBody")
+        self.body_label.setWordWrap(True)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.body_label)
+
+    @property
+    def content(self) -> tuple[str, str]:
+        return self._content
+
+    def set_text(self, title: str, body: str) -> None:
+        self._content = (title, body)
+        self.title_label.setText(title)
+        self.body_label.setText(body)
+        self.adjustSize()
+
+    def show_near(self, icon_rect) -> None:
+        screen = QApplication.screenAt(icon_rect.center()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        self.adjustSize()
+        width = self.width()
+        height = self.height()
+        x = icon_rect.center().x() - width // 2
+        x = max(available.left() + 6, min(x, available.right() - width - 6))
+        if icon_rect.center().y() < available.center().y():
+            y = icon_rect.bottom() + 6
+        else:
+            y = icon_rect.top() - height - 6
+        self.move(x, y)
+        self.show()
+        self.raise_()
 
 
 class Worker(QThread):
@@ -897,6 +972,7 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._tray_hint_shown = False
         self._tray_signature = None
+        self._tray_tooltip: Optional[TrayTooltip] = None
         self._notified_connected: Optional[bool] = None
         self._connect_name = connect_name
         self._settings = QSettings("kerio-vpn-gui", "kerio-vpn-gui")
@@ -921,6 +997,16 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_tray()
+        desktop = " ".join(
+            os.environ.get(name, "")
+            for name in ("XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP")
+        ).lower()
+        self._custom_tray_tooltip = "cinnamon" in desktop
+        self._tray_hover_timer = QTimer(self)
+        self._tray_hover_timer.setInterval(200)
+        self._tray_hover_timer.timeout.connect(self._check_tray_hover)
+        if self.tray is not None and self._custom_tray_tooltip:
+            self._tray_hover_timer.start()
         self.theme_manager.style_changed.connect(self._on_theme_changed)
         self._sync_theme_actions()
         self.toast_manager = ToastManager(self._show_window, self)
@@ -1801,6 +1887,7 @@ class MainWindow(QMainWindow):
 
     # -- трей --------------------------------------------------------------
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        self._hide_tray_tooltip()
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             if self.isVisible() and self.isActiveWindow():
                 self.hide()
@@ -1819,18 +1906,48 @@ class MainWindow(QMainWindow):
     def _update_tray_tooltip(self) -> None:
         if self.tray is None:
             return
+        title, body = self._tray_tooltip_content()
+        self.tray.setToolTip(f"{title}\n{body}")
+
+    def _tray_tooltip_content(self) -> tuple[str, str]:
         if self._busy:
-            self.tray.setToolTip(f"{APP_NAME}\nВыполняется…")
-            return
+            return "Kerio VPN", "Выполняется…"
         name = self._active_connection_name()
         if self._connected and self._tunnel is not None:
-            self.tray.setToolTip(
-                f"{name} — {APP_NAME}\nПодключено · {self._tunnel.ip}"
-            )
-        elif self._running:
-            self.tray.setToolTip(f"{name} — {APP_NAME}\nПодключение…")
-        else:
-            self.tray.setToolTip(f"{APP_NAME}\nНе подключено")
+            return name, f"Kerio VPN · Подключено · {self._tunnel.ip}"
+        if self._running:
+            return name, "Kerio VPN · Подключение…"
+        return "Kerio VPN", "Не подключено"
+
+    def _hide_tray_tooltip(self) -> None:
+        if self._tray_tooltip is not None and self._tray_tooltip.isVisible():
+            self._tray_tooltip.hide()
+
+    def _check_tray_hover(self) -> None:
+        if not self._custom_tray_tooltip:
+            return
+        if self.tray is None or not self.tray.isVisible():
+            self._hide_tray_tooltip()
+            return
+        if QApplication.activeModalWidget() is not None:
+            self._hide_tray_tooltip()
+            return
+        menu = self.tray.contextMenu()
+        if menu is not None and menu.isVisible():
+            self._hide_tray_tooltip()
+            return
+        rect = self.tray.geometry()
+        if not rect.isValid() or rect.isEmpty() or not rect.contains(QCursor.pos()):
+            self._hide_tray_tooltip()
+            return
+        if self._tray_tooltip is None:
+            self._tray_tooltip = TrayTooltip()
+        title, body = self._tray_tooltip_content()
+        if self._tray_tooltip.content != (title, body):
+            self._tray_tooltip.set_text(title, body)
+            self._tray_tooltip.show_near(rect)
+        elif not self._tray_tooltip.isVisible():
+            self._tray_tooltip.show_near(rect)
 
     def _rebuild_tray_menu(self) -> None:
         if self.tray is None:
@@ -2362,6 +2479,8 @@ class MainWindow(QMainWindow):
             return
         self._closing = True
         self._save_window_state()
+        self._tray_hover_timer.stop()
+        self._hide_tray_tooltip()
         self.toast_manager.close_all()
         if self.tray is not None:
             self.tray.hide()
