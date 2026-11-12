@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import html
 import traceback
+from functools import cmp_to_key
 from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import (
+    QCollator,
+    QLocale,
     QPointF,
     QRectF,
     QSettings,
@@ -886,6 +889,7 @@ class MainWindow(QMainWindow):
         self._worker: Optional[Worker] = None
         self._fetch_worker: Optional[Worker] = None
         self._active_profile_id: Optional[str] = None
+        self._active_connection: Optional[backend.ActiveConnection] = None
         self._running = False
         self._connected = False
         self._tunnel = None
@@ -907,6 +911,10 @@ class MainWindow(QMainWindow):
         self._icon_disconnected = make_app_icon(False, False)
         self._dot_green = dot_icon(ICON_COLORS["connected"])
         self._dot_yellow = dot_icon(ICON_COLORS["connecting"])
+        self._profile_collator = QCollator()
+        self._profile_collator.setCaseSensitivity(Qt.CaseInsensitive)
+        self._profile_collator.setNumericMode(True)
+        self._profile_collator.setLocale(QLocale.system())
 
         self._build_actions()
         self._build_ui()
@@ -1488,6 +1496,18 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOGS_DIR)))
 
     # -- таблица профилей --------------------------------------------------
+    def _compare_profiles(self, first: Profile, second: Profile) -> int:
+        result = self._profile_collator.compare(first.name, second.name)
+        if result:
+            return result
+        result = self._profile_collator.compare(first.server, second.server)
+        if result:
+            return result
+        return self._profile_collator.compare(first.username, second.username)
+
+    def _sorted_profiles(self, profiles) -> list[Profile]:
+        return sorted(profiles, key=cmp_to_key(self._compare_profiles))
+
     def _refresh_table(self) -> None:
         selected = self._selected_profile()
         selected_id = selected.id if selected else None
@@ -1501,6 +1521,7 @@ class MainWindow(QMainWindow):
             or query in profile.username.casefold()
             or query in profile.endpoint.casefold()
         ]
+        visible = self._sorted_profiles(visible)
         self.table.blockSignals(True)
         self.table.setRowCount(len(visible))
         for row, profile in enumerate(visible):
@@ -1538,6 +1559,7 @@ class MainWindow(QMainWindow):
         self._update_active_marker()
         self._update_details()
         self._rebuild_tray_menu()
+        self._update_tray_tooltip()
 
     def _selected_profile(self) -> Optional[Profile]:
         row = self.table.currentRow()
@@ -1705,6 +1727,7 @@ class MainWindow(QMainWindow):
             else None
         )
         self._active_profile_id = active_profile.id if active_profile else None
+        self._active_connection = active
 
         self._running = running
         self._connected = connected
@@ -1751,17 +1774,7 @@ class MainWindow(QMainWindow):
         self.header_icon.setPixmap(icon.pixmap(46, 46))
         if self.tray is not None:
             self.tray.setIcon(icon)
-            if self._busy:
-                pass
-            elif connected and tunnel is not None:
-                name = active_profile.name if active_profile else "VPN"
-                self.tray.setToolTip(
-                    f"{APP_NAME}: подключено\n{name}\nIP {tunnel.ip}"
-                )
-            elif running:
-                self.tray.setToolTip(f"{APP_NAME}: служба запущена, туннель не поднят")
-            else:
-                self.tray.setToolTip(f"{APP_NAME}: не подключено")
+        self._update_tray_tooltip()
 
         self.act_disconnect.setEnabled(running and not self._busy)
         self._update_active_marker()
@@ -1794,11 +1807,37 @@ class MainWindow(QMainWindow):
             else:
                 self._show_window()
 
+    def _active_connection_name(self) -> str:
+        if self._active_profile_id:
+            profile = self.store.get(self._active_profile_id)
+            if profile is not None:
+                return profile.name
+        if self._active_connection is not None:
+            return self._active_connection.server
+        return "VPN"
+
+    def _update_tray_tooltip(self) -> None:
+        if self.tray is None:
+            return
+        if self._busy:
+            self.tray.setToolTip(f"{APP_NAME}\nВыполняется…")
+            return
+        name = self._active_connection_name()
+        if self._connected and self._tunnel is not None:
+            self.tray.setToolTip(
+                f"{name} — {APP_NAME}\nПодключено · {self._tunnel.ip}"
+            )
+        elif self._running:
+            self.tray.setToolTip(f"{name} — {APP_NAME}\nПодключение…")
+        else:
+            self.tray.setToolTip(f"{APP_NAME}\nНе подключено")
+
     def _rebuild_tray_menu(self) -> None:
         if self.tray is None:
             return
+        sorted_profiles = self._sorted_profiles(self.store.profiles)
         signature = (
-            tuple((profile.id, profile.name) for profile in self.store.profiles),
+            tuple((profile.id, profile.name) for profile in sorted_profiles),
             self._active_profile_id,
             self._connected,
             self._running,
@@ -1835,10 +1874,10 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         connect_menu = menu.addMenu("Подключиться")
-        if not self.store.profiles:
+        if not sorted_profiles:
             empty = connect_menu.addAction("Нет профилей")
             empty.setEnabled(False)
-        for profile in self.store.profiles:
+        for profile in sorted_profiles:
             action = QAction(profile.name, connect_menu)
             action.setCheckable(True)
             action.setChecked(profile.id == self._active_profile_id and self._connected)
@@ -1888,6 +1927,7 @@ class MainWindow(QMainWindow):
         for action in (self.act_edit, self.act_duplicate, self.act_delete, self.act_connect):
             action.setEnabled(not busy and self._selected_profile() is not None)
         self._update_details()
+        self._update_tray_tooltip()
         if not busy:
             self._refresh_status()
 
